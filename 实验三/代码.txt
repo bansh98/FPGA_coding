@@ -1,0 +1,67 @@
+module top_counter(
+    input clk,            // 50MHz 时钟输入
+    input rst_n,          // 拨码开关复位，低电平有效
+    output reg [7:0] HEX, // 7段数码管段选输出 (含小数点 DP, a~g)
+    output [3:0] HEX_CS   // 7段数码管位选输出 (片选)
+);
+
+    // ==========================================
+    // 模块 1：50MHz 分频至 1Hz
+    // ==========================================
+    reg [24:0] div_cnt;
+    reg clk_1hz;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            div_cnt <= 25'd0;
+            clk_1hz <= 1'b0;
+        end else if (div_cnt == 25'd24_999_999) begin // 50,000,000 / 2 - 1
+            div_cnt <= 25'd0;
+            clk_1hz <= ~clk_1hz; // 计数满2500万次翻转，实现 1Hz
+        end else begin
+            div_cnt <= div_cnt + 1'b1;
+        end
+    end
+
+    // ==========================================
+    // 模块 2：由 1Hz 时钟驱动的十进制加法计数器 (0-9)
+    // ==========================================
+    reg [3:0] dec_cnt;
+    
+    always @(posedge clk_1hz or negedge rst_n) begin
+        if (!rst_n) begin
+            dec_cnt <= 4'd0;
+        end else if (dec_cnt == 4'd9) begin
+            dec_cnt <= 4'd0; // 计到 9 后归零，实现十进制
+        end else begin
+            dec_cnt <= dec_cnt + 1'b1;
+        end
+    end
+
+    // ==========================================
+    // 模块 3：数码管显示译码器 (共阴极逻辑：1亮 0灭)
+    // ==========================================
+    always @(*) begin
+        case(dec_cnt)
+            // 排列顺序 {DP, g, f, e, d, c, b, a}
+            4'd0: HEX = 8'b0011_1111; // 显示 0
+            4'd1: HEX = 8'b0000_0110; // 显示 1
+            4'd2: HEX = 8'b0101_1011; // 显示 2
+            4'd3: HEX = 8'b0100_1111; // 显示 3
+            4'd4: HEX = 8'b0110_0110; // 显示 4
+            4'd5: HEX = 8'b0110_1101; // 显示 5
+            4'd6: HEX = 8'b0111_1101; // 显示 6
+            4'd7: HEX = 8'b0000_0111; // 显示 7
+            4'd8: HEX = 8'b0111_1111; // 显示 8
+            4'd9: HEX = 8'b0110_1111; // 显示 9
+            default: HEX = 8'b0000_0000; // 默认全灭
+        endcase
+    end
+
+    // ==========================================
+    // 模块 4：片选信号驱动 (低电平有效)
+    // ==========================================
+    // 4位动态数码管，我们将最右侧第 0 位拉低 (赋0激活)，其余置 1 (关闭)
+    assign HEX_CS = 4'b1110;
+
+endmodule

@@ -1,0 +1,139 @@
+module digital_clock(
+    input clk,               // 50MHz 晶振输入 (PIN_T1)
+    input sw_rst,            // 拨码开关复位，低电平有效 (PIN_C7)
+    
+    // 4位动态数码管 (左侧，现在显示：分.个 分.十 时.个 时.十)
+    output reg [7:0] HEX_D_SEG, // 动态管段选 (a~g, dp)
+    output reg [3:0] HEX_D_CS,  // 动态管片选 (低电平有效)
+    
+    // 2位带译码静态数码管 (右侧，依然显示：秒秒)
+    output [3:0] HEX_S_A,       // 静态管右位 (秒 个位)
+    output [3:0] HEX_S_B        // 静态管左位 (秒 十位)
+);
+
+    // ==========================================
+    // 1. 分频与时钟生成
+    // ==========================================
+    reg [24:0] cnt_1hz;
+    reg [15:0] cnt_1khz;
+    reg clk_1s;
+    reg clk_1ms;
+
+    // 生成 1Hz 时钟
+    always @(posedge clk or negedge sw_rst) begin
+        if (!sw_rst) begin
+            cnt_1hz <= 25'd0;
+            clk_1s <= 1'b0;
+        end else if (cnt_1hz == 25'd24_999_999) begin
+            cnt_1hz <= 25'd0;
+            clk_1s <= ~clk_1s;
+        end else begin
+            cnt_1hz <= cnt_1hz + 1'b1;
+        end
+    end
+
+    // 生成 1kHz 时钟 (用于动态扫描)
+    always @(posedge clk or negedge sw_rst) begin
+        if (!sw_rst) begin
+            cnt_1khz <= 16'd0;
+            clk_1ms <= 1'b0;
+        end else if (cnt_1khz == 16'd24_999) begin
+            cnt_1khz <= 16'd0;
+            clk_1ms <= ~clk_1ms;
+        end else begin
+            cnt_1khz <= cnt_1khz + 1'b1;
+        end
+    end
+
+    // ==========================================
+    // 2. 计时逻辑部分 (时、分、秒)
+    // ==========================================
+    reg [5:0] sec;
+    reg [5:0] min;
+    reg [4:0] hour;
+
+    always @(posedge clk_1s or negedge sw_rst) begin
+        if (!sw_rst) begin
+            // 【修改点】：复位初始时间设为 00:59:30
+            sec <= 6'd30;
+            min <= 6'd59;
+            hour <= 5'd0;
+        end else begin
+            if (sec == 6'd59) begin
+                sec <= 6'd0;
+                if (min == 6'd59) begin
+                    min <= 6'd0;
+                    if (hour == 5'd23) hour <= 5'd0;
+                    else hour <= hour + 1'b1;
+                end else min <= min + 1'b1;
+            end else sec <= sec + 1'b1;
+        end
+    end
+
+    // ==========================================
+    // 3. 静态数码管直接输出 (显示 '秒')
+    // ==========================================
+    assign HEX_S_A = sec % 10; // 秒 个位 (右侧静态管)
+    assign HEX_S_B = sec / 10; // 秒 十位 (左侧静态管)
+
+    // ==========================================
+    // 4. 动态数码管译码与扫描逻辑 (重新排列 时 和 分)
+    // ==========================================
+    reg [1:0] scan_sel; 
+
+    // 扫描时钟切换
+    always @(posedge clk_1ms or negedge sw_rst) begin
+        if (!sw_rst) scan_sel <= 2'b00;
+        else scan_sel <= scan_sel + 1'b1;
+    end
+
+    // 动态管译码函数 (共阴极逻辑：1亮0灭)
+    function [7:0] decode(input [3:0] bin);
+        begin
+            case(bin)
+                4'd0: decode = 8'b0011_1111; 
+                4'd1: decode = 8'b0000_0110; 
+                4'd2: decode = 8'b0101_1011; 
+                4'd3: decode = 8'b0100_1111; 
+                4'd4: decode = 8'b0110_0110; 
+                4'd5: decode = 8'b0110_1101; 
+                4'd6: decode = 8'b0111_1101; 
+                4'd7: decode = 8'b0000_0111; 
+                4'd8: decode = 8'b0111_1111; 
+                4'd9: decode = 8'b0110_1111; 
+                default: decode = 8'b0000_0000; 
+            endcase
+        end
+    endfunction
+
+    // 【修改点】：扫描输出逻辑重新映射位置
+    always @(*) begin
+        case (scan_sel)
+            // 状态 0: 数码管第 0 位 (最右侧) -> 显示 时 十位
+            2'b00: begin
+                HEX_D_CS = 4'b1110;               
+                HEX_D_SEG = decode(hour / 10);     
+            end
+            // 状态 1: 数码管第 1 位 -> 显示 时 个位，并点亮小数点
+            2'b01: begin
+                HEX_D_CS = 4'b1101;  
+                HEX_D_SEG = decode(hour % 10) | 8'b1000_0000;     
+            end
+            // 状态 2: 数码管第 2 位 -> 显示 分 十位
+            2'b10: begin
+                HEX_D_CS = 4'b1011;  
+                HEX_D_SEG = decode(min / 10); 
+            end
+            // 状态 3: 数码管第 3 位 (最左侧) -> 显示 分 个位
+            2'b11: begin
+                HEX_D_CS = 4'b0111;               
+                HEX_D_SEG = decode(min % 10);     
+            end
+            default: begin
+                HEX_D_CS = 4'b1111; 
+                HEX_D_SEG = 8'b0000_0000;
+            end
+        endcase
+    end
+
+endmodule
